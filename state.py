@@ -11,8 +11,11 @@ class AgentState(TypedDict):
     - Bewertungsergebnisse (fit_score, fit_reasoning)
     - User-Interaktion (user_feedback)
     - Output (pitch_draft, obsidian_paths)
+    - Founder-Infos (founder_names, founder_info)
     """
     startup_name: str
+    founder_names: Optional[List[str]]  # User-Override für Gründer
+    founder_info: Optional[Dict]  # Auto-detected founder info
     raw_data: Dict  # scraped content, transcripts, posts
     culture_profile: Dict  # extracted philosophy, values, red/green flags
     fit_score: int  # 0-100
