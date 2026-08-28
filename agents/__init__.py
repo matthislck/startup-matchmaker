@@ -1,10 +1,15 @@
-"""
-Agents Package für das DACH Startup Matchmaker System.
+"""Agents module for the DACH Startup Matchmaker system."""
 
-Enthält die Implementierungen der 5 Agenten:
-- Scout: Datensammler
-- Profiler: Kultur-Analyst
-- Matchmaker: Bewertet Fit
-- Pitch Architect: Generiert Projektvorschläge
-- Profile Updater: Lernt aus Feedback
-"""
+from agents.scout import scout_node
+from agents.profiler import profiler_node
+from agents.matchmaker import matchmaker_node
+from agents.pitch_architect import pitch_architect_node
+from agents.profile_updater import profile_updater_node
+
+__all__ = [
+    "scout_node",
+    "profiler_node",
+    "matchmaker_node",
+    "pitch_architect_node",
+    "profile_updater_node",
+]
