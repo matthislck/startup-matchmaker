@@ -141,12 +141,13 @@ def search_reddit_discussions(startup_name: str, api_key: str) -> List[Dict]:
 # JINA READER - WEBPAGE CONTENT EXTRACTION
 # =============================================================================
 
-def jina_read_url(url: str) -> str:
+def jina_read_url(url: str, max_retries: int = 3) -> str:
     """
     Extrahiert cleanen Textinhalt einer Webseite via Jina Reader API.
     
     Args:
         url: Ziel-URL
+        max_retries: Maximale Anzahl von Retry-Versuchen bei 429/503 Fehlern
     
     Returns:
         Extrahierter Textinhalt oder leerer String bei Fehler
@@ -154,23 +155,95 @@ def jina_read_url(url: str) -> str:
     if not url:
         return ""
     
-    try:
-        # Jina Reader Endpoint
-        jina_url = f"https://r.jina.ai/{url}"
-        
-        response = requests.get(jina_url, timeout=30)
-        
-        if response.status_code == 200:
-            content = response.text.strip()
-            logger.info(f"Jina Reader erfolgreich für: {url}")
-            return content[:8000]  # Limitiere auf 8000 Zeichen
-        else:
-            logger.warning(f"Jina Reader failed for {url}: Status {response.status_code}")
-            return ""
+    # User-Agent Rotation für bessere Akzeptanz
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1"
+    ]
+    import random
+    headers = {
+        "User-Agent": random.choice(user_agents),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "de,en-US;q=0.7,en;q=0.3",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Cache-Control": "max-age=0"
+    }
     
-    except Exception as e:
-        logger.error(f"Jina Reader error: {e}")
-        return ""
+    retry_count = 0
+    base_delay = 3  # Basis-Delay in Sekunden (erhöht für bessere Erfolgsrate)
+    
+    while retry_count <= max_retries:
+        try:
+            # Jina Reader Endpoint - mit X-Retry Header für besseres Handling
+            jina_url = f"https://r.jina.ai/{url}"
+            
+            # Füge zusätzliche Jina-spezifische Header hinzu
+            jina_headers = headers.copy()
+            jina_headers["X-With-Generated-Alt"] = "true"  # Bessere Bildbeschreibungen
+            jina_headers["X-With-Links-Summary"] = "false"  # Weniger Overhead
+            
+            response = requests.get(jina_url, headers=jina_headers, timeout=45)
+            
+            if response.status_code == 200:
+                content = response.text.strip()
+                logger.info(f"Jina Reader erfolgreich für: {url}")
+                return content[:8000]  # Limitiere auf 8000 Zeichen
+            
+            elif response.status_code in [429, 503, 502]:
+                # Rate Limiting oder Service Unavailable - Retry mit Backoff
+                retry_delay = base_delay * (2 ** retry_count) + random.uniform(1, 3)
+                logger.warning(f"Jina Reader rate limited for {url}: Status {response.status_code}. Retry {retry_count+1}/{max_retries} in {retry_delay:.1f}s")
+                time.sleep(retry_delay)
+                retry_count += 1
+                
+            elif response.status_code == 403:
+                # Forbidden - oft bei zu vielen Requests vom gleichen IP
+                # Versuche mit längerem Delay
+                if retry_count < max_retries:
+                    retry_delay = 5 + random.uniform(2, 5)
+                    logger.warning(f"Jina Reader forbidden (403) for {url}. Retry {retry_count+1}/{max_retries} in {retry_delay:.1f}s")
+                    time.sleep(retry_delay)
+                    retry_count += 1
+                else:
+                    logger.error(f"Jina Reader permanently blocked (403) for {url}")
+                    return f"[Fehler: Zugriff verweigert (403) - Website blockiert Anfragen]"
+            
+            else:
+                logger.warning(f"Jina Reader failed for {url}: Status {response.status_code}")
+                return f"[Fehler: HTTP {response.status_code} - Seite konnte nicht geladen werden]"
+        
+        except requests.exceptions.Timeout:
+            logger.warning(f"Jina Reader timeout for {url}")
+            if retry_count < max_retries:
+                retry_delay = base_delay * (2 ** retry_count)
+                time.sleep(retry_delay)
+                retry_count += 1
+            else:
+                return "[Fehler: Timeout - Seite lädt zu langsam]"
+        
+        except requests.exceptions.ConnectionError as e:
+            logger.warning(f"Jina Reader connection error for {url}: {e}")
+            if retry_count < max_retries:
+                retry_delay = base_delay * (2 ** retry_count)
+                time.sleep(retry_delay)
+                retry_count += 1
+            else:
+                return "[Fehler: Verbindungsproblem]"
+        
+        except Exception as e:
+            logger.error(f"Jina Reader error: {e}")
+            return f"[Fehler: {str(e)[:100]}]"
+    
+    # Alle Retries erschöpft
+    logger.error(f"Jina Reader exhausted all retries for {url}")
+    return f"[Fehler: Zu viele Anfragen - Bitte später erneut versuchen]"
 
 
 def extract_website_content(website_url: str) -> Dict[str, str]:
@@ -189,27 +262,42 @@ def extract_website_content(website_url: str) -> Dict[str, str]:
     # Normalisiere URL (entferne trailing slash)
     website_url = website_url.rstrip('/')
     
+    # Erweiterte Liste von möglichen Seiten inkl. alternativer Pfade
     pages_to_scrape = {
         'homepage': website_url,
-        'about': f"{website_url}/about",
-        'team': f"{website_url}/team",
-        'blog': f"{website_url}/blog",
-        'careers': f"{website_url}/careers",
-        'impressum': f"{website_url}/impressum"  # DACH-spezifisch
+        'about': [f"{website_url}/about", f"{website_url}/about-us", f"{website_url}/company"],
+        'team': [f"{website_url}/team", f"{website_url}/leadership", f"{website_url}/management"],
+        'blog': [f"{website_url}/blog", f"{website_url}/news", f"{website_url}/press"],
+        'careers': [f"{website_url}/careers", f"{website_url}/jobs", f"{website_url}/work-with-us"],
+        'impressum': [f"{website_url}/impressum", f"{website_url}/legal", f"{website_url}/imprint"]  # DACH-spezifisch
     }
     
     results = {}
     
-    for page_name, url in pages_to_scrape.items():
-        try:
-            content = jina_read_url(url)
-            if content and len(content) > 100:  # Nur sinnvolle Inhalte speichern
-                results[page_name] = content
-                time.sleep(0.5)  # Rate limiting vermeiden
-            else:
-                results[page_name] = ""
-        except Exception as e:
-            logger.warning(f"Failed to scrape {page_name}: {e}")
+    for page_name, urls in pages_to_scrape.items():
+        content = ""
+        
+        # Wenn page_name 'homepage' ist, ist urls ein String, keine Liste
+        if page_name == 'homepage':
+            urls = [urls]
+        
+        for url in urls:
+            try:
+                content = jina_read_url(url)
+                if content and len(content) > 100 and "Vercel Security Checkpoint" not in content:  # Nur sinnvolle Inhalte speichern
+                    results[page_name] = content
+                    logger.info(f"Successfully scraped {page_name} from: {url}")
+                    break  # Erfolg, breche ab und versuche nicht weitere URLs
+                else:
+                    logger.debug(f"No valid content from {url}")
+            except Exception as e:
+                logger.warning(f"Failed to scrape {page_name} from {url}: {e}")
+            
+            # Rate limiting zwischen Requests
+            time.sleep(0.5)
+        
+        # Falls keine gültigen Inhalte gefunden wurden
+        if page_name not in results:
             results[page_name] = ""
     
     return results
@@ -442,23 +530,71 @@ def scrape_startup_comprehensive(
     # 1. WEBSITE CONTENT (Jina Reader)
     # ========================================
     if not website_url:
-        # Versuche Website-URL zu erraten
-        possible_urls = [
-            f"https://{startup_name.lower().replace(' ', '')}.com",
-            f"https://{startup_name.lower().replace(' ', '-')}.com",
-            f"https://www.{startup_name.lower().replace(' ', '')}.com"
-        ]
+        # Versuche Website-URL via Tavily Search zu finden (zuverlässiger als Raten)
+        logger.info(f"Searching for official website of {startup_name}...")
+        search_results = tavily_search(f"{startup_name} official website", tavily_api_key, search_depth="basic")
         
-        for url in possible_urls:
-            content = jina_read_url(url)
-            if content and len(content) > 200:
-                website_url = url
-                break
+        if search_results:
+            # Nimm das erste relevante Ergebnis als Website-URL
+            for result in search_results[:5]:
+                url = result.get('url', '')
+                content_preview = result.get('content', '')
+                
+                # Filtere nur relevante Domains (keine Social Media, keine Verzeichnisse)
+                if any(domain in url for domain in ['linkedin.com', 'twitter.com', 'facebook.com', 'youtube.com', 'crunchbase.com', 'producthunt.com', 'kununu.com', 'glassdoor.com']):
+                    continue
+                
+                # Prüfe ob URL zur Hauptdomain gehört (Wikipedia, TechCrunch, etc. enthalten oft die echte URL)
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                domain = parsed.netloc.replace('www.', '')
+                
+                # Extrahiere die Hauptdomain aus Suchergebnissen
+                # Beispiel: wenn Content "www.personio.de" enthält, nutze das
+                import re
+                url_pattern = r'(?:https?://)?(?:www\.)?([a-zA-Z0-9-]+\.[a-z]{2,6})(?:/|$)'
+                matches = re.findall(url_pattern, content_preview.lower())
+                
+                if matches:
+                    # Nehme die erste gefundene Domain die nicht Social Media ist
+                    for match in matches:
+                        if match not in ['linkedin.com', 'twitter.com', 'facebook.com', 'youtube.com', 'crunchbase.com', 'producthunt.com']:
+                            test_url = f"https://{match}"
+                            content = jina_read_url(test_url)
+                            if content and len(content) > 200 and "Vercel Security Checkpoint" not in content and "429" not in content:
+                                website_url = test_url
+                                logger.info(f"Found official website from search result: {website_url}")
+                                break
+                    
+                    if website_url:
+                        break
+        
+        # Fallback: Versuche URL zu erraten wenn Suche nichts fand
+        if not website_url:
+            possible_urls = [
+                f"https://{startup_name.lower().replace(' ', '')}.com",
+                f"https://{startup_name.lower().replace(' ', '-')}.com",
+                f"https://{startup_name.lower().replace(' ', '')}.de",
+                f"https://{startup_name.lower().replace(' ', '')}.io",
+                f"https://www.{startup_name.lower().replace(' ', '')}.com",
+                f"https://www.{startup_name.lower().replace(' ', '')}.de"
+            ]
+            
+            for url in possible_urls:
+                content = jina_read_url(url, max_retries=1)  # Schnell testen mit nur 1 Retry
+                if content and len(content) > 200 and "Vercel Security Checkpoint" not in content and "429" not in content:
+                    website_url = url
+                    logger.info(f"Guessed working website: {website_url}")
+                    break
     
     if website_url:
         raw_data['website'] = extract_website_content(website_url)
         raw_data['sources_count'] += 1
         logger.info(f"Website scraped: {website_url}")
+    else:
+        logger.warning(f"Could not find valid website for {startup_name}")
+        # Speichere Info dass Website nicht gefunden wurde
+        raw_data['website'] = {'error': 'Website not found or blocked'}
     
     # ========================================
     # 2. ALLGEMEINE SUCHE & GRÜNDER-IDENTIFIKATION
