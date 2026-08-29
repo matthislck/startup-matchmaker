@@ -8,7 +8,7 @@ als Nodes in einem LangGraph StateGraph mit bedingten Kanten und Feedback-Loop.
 import os
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from state import AgentState
@@ -111,9 +111,9 @@ def build_graph() -> StateGraph:
     
     # Bedingte Kante nach matchmaker
     workflow.add_conditional_edges(
-        source="matchmaker",
-        condition=should_continue,
-        mapping={
+        "matchmaker",
+        should_continue,
+        {
             "profile_updater": "profile_updater",
             "pitch_architect": "pitch_architect",
             "wait_for_feedback": "wait_for_feedback"

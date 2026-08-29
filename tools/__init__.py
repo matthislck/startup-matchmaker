@@ -11,13 +11,9 @@ from .obsidian_writer import (
     append_feedback
 )
 
-from .web_scraper import (
-    scrape_startup_data
-)
-
-from .podcast_transcriber import (
-    find_podcast_episodes,
-    transcribe_podcast,
+from .scraping_stack import (
+    scrape_startup_comprehensive,
+    format_for_llm,
     get_youtube_transcript
 )
 
@@ -28,11 +24,10 @@ __all__ = [
     "read_from_obsidian",
     "append_feedback",
     
-    # Web Scraping
-    "scrape_startup_data",
+    # Web Scraping (neuer Stack)
+    "scrape_startup_comprehensive",
+    "format_for_llm",
     
     # Podcasts
-    "find_podcast_episodes",
-    "transcribe_podcast",
     "get_youtube_transcript",
 ]
